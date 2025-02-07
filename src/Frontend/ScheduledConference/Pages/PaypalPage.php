@@ -3,10 +3,10 @@
 namespace PaypalPayment\Frontend\ScheduledConference\Pages;
 
 use App\Facades\Plugin;
-use App\Frontend\ScheduledConference\Pages\ParticipantRegisterStatus;
-use App\Models\Enums\RegistrationPaymentState;
-use App\Models\Registration;
 use App\Frontend\Website\Pages\Page;
+use App\Managers\PaymentManager;
+use App\Models\Payment;
+use Filament\Notifications\Notification;
 use Illuminate\Support\Str;
 use Omnipay\Omnipay;
 
@@ -14,96 +14,114 @@ class PaypalPage extends Page
 {
     protected static string $view = 'PaypalPayment::frontend.scheduledConference.pages.paypal';
 
-    function __invoke()
+    public function __invoke()
     {
         $request = app('request');
-        $registrationId = $request->input('id');
-        
-        abort_if(!$registrationId, 404);
+        $id = $request->input('id');
 
-        $registration = Registration::withTrashed()
-            ->where('id', $registrationId)
+        abort_if(! $id, 404);
+
+        $paymentQueue = Payment::query()
+            ->where('id', $id)
             ->first();
 
-        abort_if(!$registration, 404);
-        
-        if($request->input('paymentId') && $request->input('PayerID') && $request->input('token')){
-            return $this->completePayment($registration);
+        abort_if(! $paymentQueue, 404);
+        abort_if($paymentQueue->isExpired(), 403, 'Payment Queue expired');
+
+        if ($request->input('paymentId') && $request->input('PayerID') && $request->input('token')) {
+            return $this->completePayment($paymentQueue);
         }
 
-
-        return $this->handlePayment($registration);
+        return $this->handlePayment($paymentQueue);
     }
 
-    public function handlePayment(Registration $registration)
+    public function handlePayment(Payment $paymentQueue)
     {
-        $paypalPlugin = Plugin::getPlugin('PaypalPayment'); 
+        $paypalPlugin = Plugin::getPlugin('PaypalPayment');
 
         $gateway = Omnipay::create('PayPal_Rest');
-		$gateway->initialize([
-			'clientId' => $paypalPlugin->getClientId(),
-			'secret' => $paypalPlugin->getClientSecret(),
-			'testMode' => $paypalPlugin->isTestMode(),
-		]);
+        $gateway->initialize([
+            'clientId' => $paypalPlugin->getClientId(),
+            'secret' => $paypalPlugin->getClientSecret(),
+            'testMode' => $paypalPlugin->isTestMode(),
+        ]);
 
-        $transaction = $gateway->purchase(array(
-            'amount' => number_format($registration->registrationPayment->cost),
-            'currency' => $registration->registrationPayment->currency,
-            'description' => $registration->registrationPayment->name,
-            'returnUrl' => route(static::getRouteName(), ['id' => $registration->id]),
-            'cancelUrl' => route(ParticipantRegisterStatus::getRouteName()),
-        ));
-        
+        $transaction = $gateway->purchase([
+            'amount' => number_format($paymentQueue->amount, 2, '.', ''),
+            'currency' => $paymentQueue->currency,
+            'description' => $paymentQueue->getMeta('title'),
+            'returnUrl' => route(static::getRouteName(), ['id' => $paymentQueue->id]),
+            'cancelUrl' => route(static::getRouteName(), ['id' => $paymentQueue->id]),
+        ]);
 
         $response = $transaction->send();
 
-        if ($response->isRedirect()) return redirect($response->getRedirectUrl());
-        if (!$response->isSuccessful()) return abort(500, $response->getMessage());
+        if ($response->isRedirect()) {
+            return redirect($response->getRedirectUrl());
+        }
+        if (! $response->isSuccessful()) {
+            return abort(403, $response->getMessage());
+        }
 
-        abort(500, 'PayPal response was not redirect!');
+        abort(403, 'PayPal response was not redirect!');
     }
 
-    public function completePayment(Registration $registration)
+    public function completePayment(Payment $paymentQueue)
     {
         try {
             $request = app('request');
             $paypalPlugin = Plugin::getPlugin('PaypalPayment');
-            
-			$gateway = Omnipay::create('PayPal_Rest');
-			$gateway->initialize([
+
+            $gateway = Omnipay::create('PayPal_Rest');
+            $gateway->initialize([
                 'clientId' => $paypalPlugin->getClientId(),
                 'secret' => $paypalPlugin->getClientSecret(),
                 'testMode' => $paypalPlugin->isTestMode(),
             ]);
 
-			$transaction = $gateway->completePurchase([
+            $transaction = $gateway->completePurchase([
                 'payer_id' => $request->input('PayerID'),
-				'transactionReference' => $request->input('paymentId'),
+                'transactionReference' => $request->input('paymentId'),
             ]);
 
-			$response = $transaction->send();
-			if (!$response->isSuccessful()) throw new \Exception($response->getMessage());
-
-			$data = $response->getData();
-
-			if ($data['state'] != 'approved') throw new \Exception('State ' . $data['state'] . ' is not approved!');
-			if (count($data['transactions']) != 1) throw new \Exception('Unexpected transaction count!');
-			$transaction = $data['transactions'][0];
-            
-			if ((float) $transaction['amount']['total'] != (float) $registration->registrationPayment->cost 
-                || $transaction['amount']['currency'] != Str::upper($registration->registrationPayment->currency)){
-                    throw new \Exception('Amounts (' . $transaction['amount']['total'] . ' ' . $transaction['amount']['currency'] . ' vs ' . $registration->registrationPayment->cost . ' ' . $registration->registrationPayment->currency . ') don\'t match!');
+            $response = $transaction->send();
+            if (! $response->isSuccessful()) {
+                abort(403, $response->getMessage());
             }
 
-            $registration->registrationPayment->update([
-                'type' => 'Paypal',
-                'state' => RegistrationPaymentState::Paid,
-                'paid_at' => now(),
-            ]);
+            $data = $response->getData();
 
-            return redirect(route(ParticipantRegisterStatus::getRouteName()));
-		} catch (\Exception $e) {
-            abort(500, $e->getMessage());
-		}
+            if ($data['state'] != 'approved') {
+                abort(403, 'State '.$data['state'].' is not approved!');
+            }
+
+            if (count($data['transactions']) != 1) {
+                abort(403, 'Unexpected transaction count!');
+            }
+            $transaction = $data['transactions'][0];
+
+            if (
+                (float) $transaction['amount']['total'] != (float) $paymentQueue->amount
+                || $transaction['amount']['currency'] != Str::upper($paymentQueue->currency)
+            ) {
+                $message = 'Amounts ('.$transaction['amount']['total'].' '.$transaction['amount']['currency'].' vs '.$paymentQueue->amount.' '.$paymentQueue->currency.') don\'t match!';
+
+                abort(403, $message);
+            }
+
+            $paymentManager = PaymentManager::get();
+
+            $requestUrl = $paymentQueue->getMeta('request_url');
+            $paymentManager->fulfillQueued($paymentQueue, 'paypal', auth()->id());
+
+            Notification::make()
+                ->title('Payment Success')
+                ->success()
+                ->send();
+
+            return redirect()->to($requestUrl);
+        } catch (\Exception $e) {
+            abort(403, $e->getMessage());
+        }
     }
 }
