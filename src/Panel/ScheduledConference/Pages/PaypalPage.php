@@ -1,18 +1,19 @@
 <?php
 
-namespace PaypalPayment\Frontend\ScheduledConference\Pages;
+namespace PaypalPayment\Panel\ScheduledConference\Pages;
 
 use App\Facades\Plugin;
-use App\Frontend\Website\Pages\Page;
 use App\Managers\PaymentManager;
 use App\Models\Payment;
+use App\Panel\ScheduledConference\Pages\PaymentDetail;
 use Filament\Notifications\Notification;
+use Filament\Pages\Page;
 use Illuminate\Support\Str;
 use Omnipay\Omnipay;
 
 class PaypalPage extends Page
 {
-    protected static string $view = 'PaypalPayment::frontend.scheduledConference.pages.paypal';
+    protected static string $view = 'PaypalPayment::panel.scheduledConference.pages.paypal';
 
     public function __invoke()
     {
@@ -110,16 +111,19 @@ class PaypalPage extends Page
             }
 
             $paymentManager = PaymentManager::get();
+            $paymentManager->fulfillQueued($paymentQueue, 'paypal', auth()?->id());
 
-            $requestUrl = $paymentQueue->getMeta('request_url');
-            $paymentManager->fulfillQueued($paymentQueue, 'paypal', auth()->id());
+
+            $paymentQueue->setMeta('paypal_payment_id', $request->input('paymentId'));
+            $paymentQueue->setMeta('paypal_token', $request->input('token'));
+            $paymentQueue->setMeta('paypal_payer_id', $request->input('PayerID'));
 
             Notification::make()
                 ->title('Payment Success')
                 ->success()
                 ->send();
 
-            return redirect()->to($requestUrl);
+            return redirect()->to(PaymentDetail::getUrl(['record' => $paymentQueue]));
         } catch (\Exception $e) {
             abort(403, $e->getMessage());
         }

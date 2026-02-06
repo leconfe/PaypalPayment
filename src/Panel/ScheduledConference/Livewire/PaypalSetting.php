@@ -9,6 +9,7 @@ use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\Grid;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
@@ -26,6 +27,7 @@ class PaypalSetting extends Component implements HasForms
         $paypalPlugin = Plugin::getPlugin('PaypalPayment');
 
         $this->form->fill([
+            'payment_enabled' => $paypalPlugin->getSetting('payment_enabled', false),
             'test_mode' => $paypalPlugin->getSetting('test_mode', false),
             'client_id' => $paypalPlugin->getSetting('client_id', ''),
             'client_secret' => $paypalPlugin->getSetting('client_secret', ''),
@@ -40,6 +42,8 @@ class PaypalSetting extends Component implements HasForms
             ->schema([
                 Section::make()
                     ->schema([
+                        Toggle::make('payment_enabled')
+                            ->label(__('general.enabled')),
                         Checkbox::make('test_mode')
                             ->label('Sandbox')
                             ->reactive()
@@ -77,6 +81,7 @@ class PaypalSetting extends Component implements HasForms
                             try {
 
                                 $paypalPlugin = Plugin::getPlugin('PaypalPayment');
+                                $paypalPlugin->updateSetting('payment_enabled', $formData['payment_enabled']);
                                 $paypalPlugin->updateSetting('test_mode', $formData['test_mode']);
                                 if (! $formData['test_mode']) {
                                     $paypalPlugin->updateSetting('client_id', $formData['client_id']);

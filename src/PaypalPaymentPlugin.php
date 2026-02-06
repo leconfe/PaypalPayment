@@ -4,87 +4,100 @@ namespace PaypalPayment;
 
 use App\Classes\Plugin;
 use App\Facades\Hook;
-use App\Infolists\Components\LivewireEntry;
 use App\Infolists\Components\VerticalTabs as InfolistsVerticalTabs;
 use App\Models\Payment;
+use Awcodes\Shout\Components\ShoutEntry;
+use Filament\Actions\Action;
+use Filament\Forms\Components\Placeholder;
+use Filament\Infolists\Components\Livewire;
+use Filament\Infolists\Components\Section;
+use Filament\Infolists\Components\TextEntry;
 use Filament\Panel;
-use PaypalPayment\Frontend\ScheduledConference\Pages\PaypalPage;
+use PaypalPayment\Panel\ScheduledConference\Pages\PaypalPage;
 use PaypalPayment\Panel\ScheduledConference\Livewire\PaypalSetting;
 use Rahmanramsi\LivewirePageGroup\PageGroup;
 
 class PaypalPaymentPlugin extends Plugin
 {
-    public function boot()
-    {
-        if (! app()->getCurrentScheduledConference()) {
-            return;
-        }
+	public function boot()
+	{
+		if (! app()->getCurrentScheduledConference()) {
+			return;
+		}
+		if ($this->isProperlySetup()) {
+			Hook::add('PaymentManager::getPaymentMethodActions', function ($hookName, &$actions) {
+				$actions['paypal'] = Action::make('paypal')
+					->label("Paypal Payment")
+					->url(fn($record) => route(PaypalPage::getRouteName('scheduledConference'), ['id' => $record->getKey()]));
 
-        if ($this->isProperlySetup()) {
-            Hook::add('PaymentManager::getPaymentMethodOptions', function ($hookName, &$options) {
-                $options['paypal'] = 'Paypal';
+				return false;
+			});
 
-                return false;
-            });
+			Hook::add('PaymentManager::getPaymentMethodInfolist', function ($hookName, &$schemas) {
+				$schemas[] = Section::make("Paypal Payment")
+					->visible(fn($record) => $record->payment_method == 'paypal')
+					->description('')
+					->schema([
+						ShoutEntry::make('information')
+							->content('Detailed financial information is securely stored on PayPal')
+							->type('info'),
+						TextEntry::make('payment_id')
+							->label('Payment ID')
+							->getStateUsing(fn($record) => $record->getMeta('paypal_payment_id')),
+						TextEntry::make('paypal_token')
+							->label('Token')
+							->visible(fn() => auth()->user()->can('update', app()->getCurrentScheduledConference()))
+							->getStateUsing(fn($record) => $record->getMeta('paypal_token')),
+						TextEntry::make('paypal_payer_id')
+							->label('Payer ID')
+							->visible(fn() => auth()->user()->can('update', app()->getCurrentScheduledConference()))
+							->getStateUsing(fn($record) => $record->getMeta('paypal_payer_id')),
+					]);
 
-            Hook::add('Frontend::Payment::handleRequestUrl', function ($hookName, Payment $payment, array &$data, string &$requestUrl) {
+				return false;
+			});
+		}
+	}
 
-                if ($data['payment_method'] == 'paypal') {
-                    $requestUrl = route(PaypalPage::getRouteName('scheduledConference'), ['id' => $payment->getKey()]);
-                }
+	public function onPanel(Panel $panel): void
+	{
+		if ($panel->getId() !== 'scheduledConference') {
+			return;
+		}
 
-                return true;
-            });
+		$panel->discoverLivewireComponents(in: $this->pluginPath . '/src/Panel/ScheduledConference/Livewire', for: 'PaypalPayment\\Panel\\ScheduledConference\\Livewire');
 
-        }
-    }
+		$panel->pages([
+			PaypalPage::class,
+		]);
 
-    public function onFrontend(PageGroup $frontend): void
-    {
-        if ($frontend->getId() !== 'scheduledConference') {
-            return;
-        }
+		Hook::add('Payments::PaymentMethodTabs', function ($hookName, &$tabs) {
+			$tabs[] = InfolistsVerticalTabs\Tab::make('paypal')
+				->label('Paypal')
+				->icon('heroicon-o-credit-card')
+				->schema([
+					Livewire::make(PaypalSetting::class),
+				]);
+		});
+	}
 
-        $frontend->discoverPages(in: $this->pluginPath.'/src/Frontend/ScheduledConference/Pages', for: 'PaypalPayment\\Frontend\\ScheduledConference\\Pages');
+	public function isProperlySetup(): bool
+	{
+		return $this->getSetting('payment_enabled', false) && $this->getClientId() && $this->getClientSecret();
+	}
 
-    }
+	public function isTestMode(): bool
+	{
+		return $this->getSetting('test_mode', false);
+	}
 
-    public function onPanel(Panel $panel): void
-    {
-        if ($panel->getId() !== 'scheduledConference') {
-            return;
-        }
+	public function getClientId(): ?string
+	{
+		return $this->isTestMode() ? $this->getSetting('client_id_test') : $this->getSetting('client_id');
+	}
 
-        $panel->discoverLivewireComponents(in: $this->pluginPath.'/src/Panel/ScheduledConference/Livewire', for: 'PaypalPayment\\Panel\\ScheduledConference\\Livewire');
-
-        Hook::add('Payments::PaymentMethodTabs', function ($hookName, &$tabs) {
-            $tabs[] = InfolistsVerticalTabs\Tab::make('paypal')
-                ->label('Paypal')
-                ->icon('heroicon-o-credit-card')
-                ->schema([
-                    LivewireEntry::make('settings')
-                        ->livewire(PaypalSetting::class),
-                ]);
-        });
-    }
-
-    public function isProperlySetup(): bool
-    {
-        return $this->getClientId() && $this->getClientSecret();
-    }
-
-    public function isTestMode(): bool
-    {
-        return $this->getSetting('test_mode', false);
-    }
-
-    public function getClientId(): ?string
-    {
-        return $this->isTestMode() ? $this->getSetting('client_id_test') : $this->getSetting('client_id');
-    }
-
-    public function getClientSecret(): ?string
-    {
-        return $this->isTestMode() ? $this->getSetting('client_secret_test') : $this->getSetting('client_secret');
-    }
+	public function getClientSecret(): ?string
+	{
+		return $this->isTestMode() ? $this->getSetting('client_secret_test') : $this->getSetting('client_secret');
+	}
 }
