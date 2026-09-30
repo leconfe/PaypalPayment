@@ -13,6 +13,7 @@ use Filament\Infolists\Components\Livewire;
 use Filament\Infolists\Components\Section;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Panel;
+use Illuminate\Support\HtmlString;
 use PaypalPayment\Panel\ScheduledConference\Pages\PaypalPage;
 use PaypalPayment\Panel\ScheduledConference\Livewire\PaypalSetting;
 use Rahmanramsi\LivewirePageGroup\PageGroup;
@@ -27,7 +28,7 @@ class PaypalPaymentPlugin extends Plugin
 		if ($this->isProperlySetup()) {
 			Hook::add('PaymentManager::getPaymentMethodActions', function ($hookName, &$actions) {
 				$actions['paypal'] = Action::make('paypal')
-					->label("Paypal Payment")
+					->label($this->paypalBrandLogo())
 					->url(fn($record) => route(PaypalPage::getRouteName('scheduledConference'), ['id' => $record->getKey()]));
 
 				return false;
@@ -73,12 +74,21 @@ class PaypalPaymentPlugin extends Plugin
 
 		Hook::add('Payments::PaymentMethodTabs', function ($hookName, &$tabs) {
 			$tabs[] = InfolistsVerticalTabs\Tab::make('paypal')
-				->label('Paypal')
-				->icon('heroicon-o-credit-card')
+				->label($this->paypalBrandLogo())
+				->icon(null)
 				->schema([
 					Livewire::make(PaypalSetting::class),
 				]);
 		});
+	}
+
+	protected function paypalBrandLogo(): HtmlString
+	{
+		return new HtmlString(
+			'<span role="img" aria-label="PayPal" title="PayPal" style="display:inline-block;font-family:Arial,sans-serif;font-size:1rem;font-weight:700;letter-spacing:-.05em;line-height:1">'
+			.'<span style="color:#003087">Pay</span><span style="color:#009cde">Pal</span>'
+			.'</span>'
+		);
 	}
 
 	public function isProperlySetup(): bool
